@@ -39,14 +39,15 @@ q(mu_t) ~ Normal(mean_mu, nglambda)
 q(tau_t) ~ Gamma(a_tao, b_tao)
 '''
 class VDPGMM(object):
-    def __init__(self, T, eps = 0, max_iter = 50, alpha = 1, thresh=1e-3):
+    def __init__(self, T, max_iter = 50, alpha = 1, thresh=1e-3):
         self.T = T
-        self.eps = eps
         self.max_iter = max_iter
         self.alpha = alpha
         self.thresh=1e-3
 
-    def fit(self, X):
+    _log_normalize = staticmethod(log_normalize)
+
+    def _initialize(self, X):
         self.X = X
         self.N, self.P = X.shape
 
@@ -73,20 +74,36 @@ class VDPGMM(object):
 
         self.lbs = []
         self.converge = False
-        for i in xrange(self.max_iter):
-            #E STEP
-            self.phi = self.update_c(self.X)
 
-            #M STEP
-            self.update_v()
-            self.update_mu()
-            self.update_tao()
+    def _update(self, X):
+         #E STEP
+        self.phi = self.update_c(X)
+
+        #M STEP
+        self.update_v()
+        self.update_mu()
+        self.update_tao()
+
+    def _do_fit(self, update_func):
+        self.lbs = []
+        n_iter = self.max_iter
+        self.converge = False
+        for i in xrange(n_iter):
+            update_func()
 
             self.lbs.append(self.lowerbound())
 
-            if len(self.lbs) > 1 and self.lbs[-1] - self.lbs[-2] < self.thresh:
+            if not self.thresh is None and len(self.lbs) > 1 and \
+                100 * (self.lbs[-1] - self.lbs[-2]) / np.abs(self.lbs[-2]) < self.thresh:
                 self.converge = True
                 break
+
+    def fit(self, X):
+        self._initialize(X)
+
+        update_func = lambda: self._update(self.X)
+
+        self._do_fit(update_func)
 
     def update_mu(self):
         for t in xrange(self.T):
@@ -107,7 +124,7 @@ class VDPGMM(object):
         phi_cum = np.cumsum(self.phi[:0:-1, :], axis = 0)[::-1, :]
         self.gamma[:-1, 1] = self.alpha + np.sum(phi_cum, axis = 1)
 
-    def update_c(self, X):
+    def _log_lik_pi(self):
         sd = digamma(self.gamma[:, 0] + self.gamma[:, 1])
         logv = digamma(self.gamma[:, 0]) - sd
         sum_lognv = np.zeros(self.T)
@@ -117,16 +134,25 @@ class VDPGMM(object):
         likc = logv + sum_lognv
         likc[-1] = np.log(1 - (sum(np.exp(likc[:-1]))))
 
+        return likc
+
+    def _log_lik_x(self, X):
         likx = np.zeros((self.T, self.N))
         for t in xrange(self.T):
             likx[t, :] = .5*self.P*(digamma(self.a_tao[t]) - np.log(self.b_tao[t]) - np.log(2*np.pi))
             tao_t = self.a_tao[t] / self.b_tao[t]
             diff = np.sum((X - self.mean_mu[t])**2, axis = 1) + np.trace(self.cov_mu[t])
             likx[t, :] -= .5 * tao_t * diff
+        return likx
+
+    def update_c(self, X):
+        likc = self._log_lik_pi()
+
+        likx = self._log_lik_x(X)
 
         s = likc[:, np.newaxis] + likx
 
-        return log_normalize(s, axis=0)
+        return self._log_normalize(s, axis=0)
 
     def lowerbound(self):
         lb = 0
