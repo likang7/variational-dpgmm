@@ -67,6 +67,7 @@ class VDPGMM(object):
 
         # c
         self.phi = np.ones((self.T, self.N)) / self.T
+        self.Nt = np.sum(self.phi, axis = 1)
 
         #hyper
         self.a0 = 1
@@ -76,8 +77,8 @@ class VDPGMM(object):
         self.converge = False
 
     def _update(self, X):
-         #E STEP
-        self.phi = self.update_c(X)
+        #E STEP
+        self.phi, self.Nt = self._update_c(X)
 
         #M STEP
         self.update_v()
@@ -119,7 +120,7 @@ class VDPGMM(object):
             self.b_tao[t] = self.b0 + .5 * np.sum(np.multiply(self.phi[t], diff))
 
     def update_v(self):
-        sum_phi = np.sum(self.phi, axis = 1)
+        sum_phi = self.Nt
         self.gamma[:, 0] = 1 + sum_phi
         phi_cum = np.cumsum(self.phi[:0:-1, :], axis = 0)[::-1, :]
         self.gamma[:-1, 1] = self.alpha + np.sum(phi_cum, axis = 1)
@@ -137,7 +138,7 @@ class VDPGMM(object):
         return likc
 
     def _log_lik_x(self, X):
-        likx = np.zeros((self.T, self.N))
+        likx = np.zeros((self.T, X.shape[0]))
         for t in xrange(self.T):
             likx[t, :] = .5*self.P*(digamma(self.a_tao[t]) - np.log(self.b_tao[t]) - np.log(2*np.pi))
             tao_t = self.a_tao[t] / self.b_tao[t]
@@ -145,14 +146,16 @@ class VDPGMM(object):
             likx[t, :] -= .5 * tao_t * diff
         return likx
 
-    def update_c(self, X):
+    def _update_c(self, X):
         likc = self._log_lik_pi()
 
         likx = self._log_lik_x(X)
 
         s = likc[:, np.newaxis] + likx
 
-        return self._log_normalize(s, axis=0)
+        phi = self._log_normalize(s, axis=0)
+
+        return phi, np.sum(self.phi, axis = 1)
 
     def lowerbound(self):
         lb = 0
@@ -219,7 +222,7 @@ class VDPGMM(object):
         return lb
 
     def predict(self, X):
-        phi = self.update_c(X)
+        phi, _ = self._update_c(X)
         clusters = np.argmax(phi, axis=0)
         return clusters
         
