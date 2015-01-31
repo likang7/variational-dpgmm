@@ -7,6 +7,10 @@ class VDPGLM(VDPGMM):
     def __init__(self, T=1, max_iter=50, alpha=1, thresh=1e-3):
         super(VDPGLM, self).__init__(T, max_iter, alpha, thresh)
 
+    def __str__(self):
+        return 'VDPGLM(T=%d, max_iter=%d, alpha=%f, thresh=%s)' \
+            % (self.T, self.max_iter, self.alpha, self.thresh)
+
     def _initialize(self, X, y):
         super(VDPGLM, self)._initialize(X)
         self.y = np.asarray(y)
@@ -125,7 +129,6 @@ class VDPGLM(VDPGMM):
 
         T = self.T
         N, P = self.X.shape
-        K = self.K
 
         #beta
         d_a_beta = digamma(self.a_beta)
@@ -141,11 +144,11 @@ class VDPGLM(VDPGMM):
         Eq_ww = np.empty(T)
         for t in xrange(T):
             Eq_ww[t] = self.mean_w[t].dot(self.mean_w[t]) + np.trace(self.cov_w[t])
-        lpw = .5 * np.sum(K*ln_beta - self.beta*Eq_ww)
+        lpw = .5 * np.sum(P*ln_beta - self.beta*Eq_ww)
         lqw = 0
         for t in xrange(T):
             sign, logdet = np.linalg.slogdet(self.cov_w[t])
-            lqw += -0.5*(sign*logdet + K)
+            lqw += -0.5*(sign*logdet + P)
         lb += lpw - lqw
 
         #y
