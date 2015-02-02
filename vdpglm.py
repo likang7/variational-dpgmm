@@ -4,8 +4,8 @@ from numpy.linalg import inv
 from scipy.special import digamma, gammaln
 
 class VDPGLM(VDPGMM):
-    def __init__(self, T=1, max_iter=50, alpha=1, thresh=1e-3):
-        super(VDPGLM, self).__init__(T, max_iter, alpha, thresh)
+    def __init__(self, T=1, max_iter=50, alpha=1, thresh=1e-3, verbose=False):
+        super(VDPGLM, self).__init__(T, max_iter, alpha, thresh, verbose)
 
     def __str__(self):
         return 'VDPGLM(T=%d, max_iter=%d, alpha=%f, thresh=%s)' \
@@ -33,7 +33,7 @@ class VDPGLM(VDPGMM):
         self.xi = self.a_xi / self.b_xi
 
         # muy
-        self.mean_muy = np.random.normal(loc=0.0, scale=1.0, size=(T))
+        self.mean_muy = np.random.normal(loc=0.0, scale=1e-3, size=(T))
         self.cov_muy = np.ones(T)
 
         self.a_beta0 = 1e-3
@@ -75,12 +75,12 @@ class VDPGLM(VDPGMM):
             liky[t] -= .5 * self.xi[t] * bound_Y[t]
         return liky
 
-    def _update_c(self, X, bound_Y=None):
+    def _update_c(self, bound_X, bound_Y=None):
         bound_Y = self.bound_Y if bound_Y is None else bound_Y
 
         likc = self._log_lik_pi()
 
-        likx = self._log_lik_x(X)
+        likx = self._log_lik_x(bound_X)
 
         liky = self._log_lik_y(bound_Y)
 
@@ -118,7 +118,8 @@ class VDPGLM(VDPGMM):
 
     def predict(self, x):
         x = np.asarray(x)
-        phi, _ = super(VDPGLM, self)._update_c(x)
+        bound_X = self._bound_x(x)
+        phi, _ = super(VDPGLM, self)._update_c(bound_X)
         y = np.zeros(x.shape[0])
         for t in xrange(self.T):
             y += phi[t] * (x.dot(self.mean_w[t]) + self.mean_muy[t])

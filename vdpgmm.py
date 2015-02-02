@@ -39,11 +39,12 @@ q(mu_t) ~ Normal(mean_mu, nglambda)
 q(tau_t) ~ Gamma(a_tao, b_tao)
 '''
 class VDPGMM(object):
-    def __init__(self, T, max_iter = 50, alpha = 1, thresh=1e-3):
+    def __init__(self, T, max_iter = 50, alpha = 1, thresh=1e-3, verbose=False):
         self.T = T
         self.max_iter = max_iter
         self.alpha = alpha
-        self.thresh=1e-3
+        self.thresh = thresh
+        self.verbose = verbose
 
     _log_normalize = staticmethod(log_normalize)
 
@@ -76,14 +77,37 @@ class VDPGMM(object):
         self.lbs = []
         self.converge = False
 
+        self.bound_X = self._bound_x(self.X)
+
+    def _bound_x(self, X):
+        N, P = X.shape
+        bound_x = np.empty((self.T, N))
+        for t in xrange(self.T):
+            bound_x[t] = np.sum((X - self.mean_mu[t])**2, axis = 1) + np.trace(self.cov_mu[t])
+        return bound_x
+
     def _update(self, X):
         #E STEP
-        self.phi, self.Nt = self._update_c(X)
+        self.phi, self.Nt = self._update_c(self.bound_X)
 
         #M STEP
         self.update_v()
         self.update_mu()
-        self.update_tao()
+
+        self.bound_X = self._bound_x(self.X)
+        self.update_tao(self.bound_X)
+
+    def print_log(self, n=0):
+        clusters = np.argmax(self.phi, axis=0)
+        print 'n=%d, clusters=%d %s'%(n + 1, len(np.unique(clusters)), np.unique(clusters))
+        
+        print [np.sum(clusters == label) for label in np.unique(clusters)] 
+
+        print 'lowerbound ', self.lbs[-1]
+        
+        if len(self.lbs) > 1:
+            eps = self.lbs[-1] - self.lbs[-2]
+            print 'eps:%f, diff:%.5f%%'%(eps, 100 * (self.lbs[-1] - self.lbs[-2]) / np.abs(self.lbs[-2]))
 
     def _do_fit(self, update_func):
         self.lbs = []
@@ -94,7 +118,10 @@ class VDPGMM(object):
 
             self.lbs.append(self.lowerbound())
 
-            if not self.thresh is None and len(self.lbs) > 1 and \
+            if self.verbose:
+                self.print_log(i)
+
+            if self.thresh is not None and len(self.lbs) > 1 and \
                 100 * (self.lbs[-1] - self.lbs[-2]) / np.abs(self.lbs[-2]) < self.thresh:
                 self.converge = True
                 break
@@ -113,11 +140,10 @@ class VDPGMM(object):
             self.cov_mu[t] = np.linalg.inv((tao_t*Nt + 1)*np.eye(self.P))
             self.mean_mu[t] = tao_t * self.cov_mu[t].dot(self.X.T.dot(self.phi[t]))
 
-    def update_tao(self):
+    def update_tao(self, bound_X):
         for t in xrange(self.T):
             self.a_tao[t] = self.a0 + .5 * self.P * np.sum(self.phi[t])
-            diff = np.sum((self.X - self.mean_mu[t])**2, axis = 1) + np.trace(self.cov_mu[t])#+ self.P
-            self.b_tao[t] = self.b0 + .5 * np.sum(np.multiply(self.phi[t], diff))
+            self.b_tao[t] = self.b0 + .5 * np.sum(np.multiply(self.phi[t], bound_X[t]))
 
     def update_v(self):
         sum_phi = self.Nt
@@ -137,19 +163,18 @@ class VDPGMM(object):
 
         return likc
 
-    def _log_lik_x(self, X):
-        likx = np.zeros((self.T, X.shape[0]))
+    def _log_lik_x(self, bound_X):
+        likx = np.zeros(bound_X.shape)
         for t in xrange(self.T):
             likx[t, :] = .5*self.P*(digamma(self.a_tao[t]) - np.log(self.b_tao[t]) - np.log(2*np.pi))
             tao_t = self.a_tao[t] / self.b_tao[t]
-            diff = np.sum((X - self.mean_mu[t])**2, axis = 1) + np.trace(self.cov_mu[t])
-            likx[t, :] -= .5 * tao_t * diff
+            likx[t, :] -= .5 * tao_t * bound_X[t]
         return likx
 
-    def _update_c(self, X):
+    def _update_c(self, bound_X):
         likc = self._log_lik_pi()
 
-        likx = self._log_lik_x(X)
+        likx = self._log_lik_x(bound_X)
 
         s = likc[:, np.newaxis] + likx
 
@@ -202,7 +227,7 @@ class VDPGMM(object):
             if t < T - 1:
                 lpc += np.sum(phi_cum[t] * dg1[t])
             lpc += np.sum(self.phi[t]*dg0[t])
-        n_phi = self.phi[self.phi>np.finfo(np.float32).eps]
+        n_phi = self.phi#[self.phi>np.finfo(np.float32).eps]
         # Eq[log q(Z | phi)]
         lqc = np.sum(n_phi*np.log(n_phi))
         lb += lpc - lqc
@@ -210,19 +235,15 @@ class VDPGMM(object):
         #x
         lpx = 0
         # Eq[log p(X)]
-        likx = np.zeros((self.T, self.N))
-        for t in xrange(self.T):
-            likx[t, :] = .5*self.P*(digamma(self.a_tao[t]) - np.log(self.b_tao[t]) - np.log(2*np.pi))
-            tao_t = self.a_tao[t] / self.b_tao[t]
-            diff = np.sum((self.X - self.mean_mu[t])**2, axis = 1) + np.trace(self.cov_mu[t])
-            likx[t, :] -= .5 * tao_t * diff
+        likx = self._log_lik_x(self.bound_X)
         lpx = np.sum(self.phi * likx)
 
         lb += lpx
         return lb
 
     def predict(self, X):
-        phi, _ = self._update_c(X)
+        bound_X = self._bound_x(X)
+        phi, _ = self._update_c(bound_X)
         clusters = np.argmax(phi, axis=0)
         return clusters
         
